@@ -36,26 +36,6 @@ Shake_Device *device;
 int id_shake_level[16];
 #endif
 
-enum {
-	DKEY_SELECT = 0,
-	DKEY_L3,
-	DKEY_R3,
-	DKEY_START,
-	DKEY_UP,
-	DKEY_RIGHT,
-	DKEY_DOWN,
-	DKEY_LEFT,
-	DKEY_L2,
-	DKEY_R2,
-	DKEY_L1,
-	DKEY_R1,
-	DKEY_TRIANGLE,
-	DKEY_CIRCLE,
-	DKEY_CROSS,
-	DKEY_SQUARE,
-
-	DKEY_TOTAL
-};
 
 static SDL_Surface *screen;
 unsigned short *SCREEN;
@@ -71,6 +51,7 @@ static bool last_keep_aspect = false;
 void config_load();
 void config_save();
 void update_window_size(int w, int h, bool ntsc_fix);
+void print_controllers_info();
 
 static const char *KEEP_ASPECT_FILENAME = "/sys/devices/platform/jz-lcd.0/keep_aspect_ratio";
 
@@ -132,8 +113,10 @@ static char homedir[PATH_MAX] =		"./.pcsx4all";
 static char memcardsdir[PATH_MAX] =	"./.pcsx4all/memcards";
 static char biosdir[PATH_MAX] =		"./.pcsx4all/bios";
 static char patchesdir[PATH_MAX] =	"./.pcsx4all/patches";
-char sstatesdir[PATH_MAX] = "./.pcsx4all/sstates";
-char cheatsdir[PATH_MAX] = "./.pcsx4all/cheats";
+static char jsdir[PATH_MAX] =       "./.pcsx4all/js";
+static char profilesdir[PATH_MAX] = "./.pcsx4all/js/profiles";
+char sstatesdir[PATH_MAX] =  "./.pcsx4all/sstates";
+char cheatsdir[PATH_MAX] =   "./.pcsx4all/cheats";
 
 static char McdPath1[MAXPATHLEN] = "";
 static char McdPath2[MAXPATHLEN] = "";
@@ -147,6 +130,8 @@ static char BiosFile[MAXPATHLEN] = "";
 
 static void setup_paths()
 {
+	char fname[MAXPATHLEN];
+
 #ifndef __WIN32__
 	home = getenv("HOME");
 #else
@@ -160,14 +145,39 @@ static void setup_paths()
 		sprintf(biosdir, "%s/bios", homedir);
 		sprintf(patchesdir, "%s/patches", homedir);
 		sprintf(cheatsdir, "%s/cheats", homedir);
+		sprintf(jsdir, "%s/js", homedir);
+		sprintf(profilesdir, "%s/profiles", jsdir);
 	}
 
+	// create all necessary dirs
 	MKDIR(homedir);
 	MKDIR(sstatesdir);
 	MKDIR(memcardsdir);
 	MKDIR(biosdir);
 	MKDIR(patchesdir);
 	MKDIR(cheatsdir);
+	MKDIR(jsdir);
+	MKDIR(profilesdir);
+
+	// create default controller cfg files
+	for(int i = 0; i < MAX_CONTROLLERS; i++) {
+		sprintf(fname, "%s/js%d.cfg", jsdir, i);
+		if(access(fname, F_OK) == -1) {
+			// player 1, deadzone of 25% and a different button profile for each
+			controllers[i].player = 0;
+			controllers[i].analog_deadzone = 25;
+			controllers[i].profile_id = i;
+			controller_config_save(i);
+		}
+	}
+
+	// create default controller profile files
+	for(int i = 0; i < MAX_JS_PROFILES; i++) {
+		sprintf(fname, "%s/profile%d.cfg", profilesdir, i);
+		if(access(fname, F_OK) == -1) {
+			controller_profile_set_to_default(i);
+		}
+	}
 }
 
 void probe_lastdir()
@@ -190,6 +200,129 @@ void probe_lastdir()
 #ifdef PSXREC
 extern u32 cycle_multiplier; // in mips/recompiler.cpp
 #endif
+
+void print_controllers_info() {
+	for(int i = 0; i<MAX_CONTROLLERS; i++) {
+		printf("----js%d----\n", i);
+		printf("player: %d\n", controllers[i].player);
+		printf("profile_id: %d\n", controllers[i].profile_id);
+		printf("analog_deadzone: %d\n", controllers[i].analog_deadzone);
+	}
+	printf("\n\n");
+}
+
+void controller_profile_load(int profile_id) {
+	char config[MAXPATHLEN];
+    FILE *f = NULL;
+	int button, value;
+
+    sprintf(config, "%s/profile%d.cfg", profilesdir, profile_id);
+	if((f = fopen(config, "r")) == NULL) {
+		printf("Failed to open config file: \"%s\" for reading.\n", config);
+		return;
+	}
+
+	if((fscanf(f, "JS_PROFILE_VERSION %d\n", &value) == 1) && (value == JS_PROFILE_VERSION)) {
+		while(fscanf(f, "SDL %d == PSX %d\n", &button, &value) == 2) {
+			profiles[profile_id][button] = (uint8_t) value;
+		}
+	}
+
+    fclose(f);
+}
+
+void controller_profile_save(int profile_id, uint8_t *profile) {
+	char config[MAXPATHLEN];
+    FILE *f = NULL;
+
+    sprintf(config, "%s/profile%d.cfg", profilesdir, profile_id);
+	if((f = fopen(config, "w")) == NULL) {
+		printf("Failed to open config file: \"%s\" for writing.\n", config);
+		return;
+	}
+
+	fprintf(f, "JS_PROFILE_VERSION %d\n", JS_PROFILE_VERSION);
+	for(int i=0; i<PROFILE_LENGTH; i++) {
+		fprintf(f, "SDL %d == PSX %d\n", i, profile[i]);
+	}
+
+    fclose(f);
+}
+
+void controller_profile_set_to_default(int profile_id){
+	// default configuration: button 0 -> triangle, button 1 -> circle ...
+	uint_least8_t default_profile[] = {
+		DKEY_TRIANGLE,
+		DKEY_CIRCLE,
+		DKEY_CROSS,
+		DKEY_SQUARE,
+		DKEY_L1,
+		DKEY_R1,
+		DKEY_L2,
+		DKEY_R2,
+		DKEY_SELECT,
+		DKEY_START,
+		DKEY_L3,
+		DKEY_R3,
+		DKEY_NONE,
+		DKEY_NONE,
+		DKEY_NONE,
+		DKEY_NONE
+	};
+
+	for(int i=0; i<PROFILE_LENGTH; i++) {
+		if(profile_id == 0) {
+			// the controllers[0] (native buttons) has a different default config
+			// and the profile 0 is the default profile for the controller 0
+			// we auto-map it to the exact sequence of the enum PSX_BUTTON
+			profiles[profile_id][i] = i;
+		} else {
+			profiles[profile_id][i] = default_profile[i];
+		}
+	}
+	controller_profile_save(profile_id, profiles[profile_id]);
+}
+
+void controller_config_load(int js_id) {
+	char config[MAXPATHLEN];
+    FILE *f = NULL;
+	int value;
+
+    sprintf(config, "%s/js%d.cfg", jsdir, js_id);
+	if((f = fopen(config, "r")) == NULL) {
+		printf("Failed to open config file: \"%s\" for reading.\n", config);
+		return;
+	}
+
+	if((fscanf(f, "JS_CONFIG_VERSION %d\n", &value) == 1) && (value == JS_CONFIG_VERSION)) {
+		if (fscanf(f, "player %d\n", &value) == 1)
+			controllers[js_id].player = value;
+		if (fscanf(f, "analog_deadzone %d\n", &value) == 1)
+			controllers[js_id].analog_deadzone = value;
+		if (fscanf(f, "profile_id %d\n", &value) == 1)
+			controllers[js_id].profile_id = value;
+	}
+
+    fclose(f);
+}
+
+void controller_config_save(int js_id) {
+	char config[MAXPATHLEN];
+    FILE *f = NULL;
+
+    sprintf(config, "%s/js%d.cfg", jsdir, js_id);
+	if((f = fopen(config, "w")) == NULL) {
+		printf("Failed to open config file: \"%s\" for writing.\n", config);
+		return;
+	}
+
+	fprintf(f, "JS_CONFIG_VERSION %d\n", JS_CONFIG_VERSION);
+	fprintf(f, "player %d\n", controllers[js_id].player);
+    fprintf(f, "analog_deadzone %d\n", controllers[js_id].analog_deadzone);
+    fprintf(f, "profile_id %d\n", controllers[js_id].profile_id);
+
+    fclose(f);
+}
 
 void config_load()
 {
@@ -524,52 +657,14 @@ int state_save(int slot)
 	return SaveState(savename);
 }
 
-static struct {
-	int key;
-	int bit;
-} keymap[] = {
-	{ SDLK_UP,			DKEY_UP },
-	{ SDLK_DOWN,		DKEY_DOWN },
-	{ SDLK_LEFT,		DKEY_LEFT },
-	{ SDLK_RIGHT,		DKEY_RIGHT },
-#ifdef GCW_ZERO
-	{ SDLK_LSHIFT,		DKEY_SQUARE },
-	{ SDLK_LCTRL,		DKEY_CIRCLE },
-	{ SDLK_SPACE,		DKEY_TRIANGLE },
-	{ SDLK_LALT,		DKEY_CROSS },
-	{ SDLK_TAB,			DKEY_L1 },
-	{ SDLK_BACKSPACE,	DKEY_R1 },
-	{ SDLK_PAGEUP,		DKEY_L2 },
-	{ SDLK_PAGEDOWN,	DKEY_R2 },
-	{ SDLK_KP_DIVIDE,	DKEY_L3 },
-	{ SDLK_KP_PERIOD,	DKEY_R3 },
-	{ SDLK_ESCAPE,		DKEY_SELECT },
-#else
-	{ SDLK_a,		DKEY_SQUARE },
-	{ SDLK_x,		DKEY_CIRCLE },
-	{ SDLK_s,		DKEY_TRIANGLE },
-	{ SDLK_z,		DKEY_CROSS },
-	{ SDLK_q,		DKEY_L1 },
-	{ SDLK_w,		DKEY_R1 },
-	{ SDLK_e,		DKEY_L2 },
-	{ SDLK_r,		DKEY_R2 },
-	{ SDLK_BACKSPACE,	DKEY_SELECT },
-#endif
-	{ SDLK_RETURN,		DKEY_START },
-	{ 0, 0 }
-};
 
-static uint16_t pad1 = 0xFFFF;
+// 0 for player 1, 1 for player 2
+static uint16_t pads[2] = {0xFFFF, 0xFFFF};
+static uint16_t pad_buttons[2] = {0xFFFF, 0xFFFF};
+static unsigned short analogs[2] = {0, 0};
 
-static uint16_t pad2 = 0xFFFF;
-
-static uint16_t pad1_buttons = 0xFFFF;
-
-static unsigned short analog1 = 0;
-
-SDL_Joystick* sdl_joy[2];
-
-#define joy_commit_range    8192
+// analog range: -32768 to 32767
+#define ANALOG_MAX_VALUE 32768
 enum {
 	ANALOG_UP = 1,
 	ANALOG_DOWN = 2,
@@ -577,83 +672,94 @@ enum {
 	ANALOG_RIGHT = 8
 };
 
-struct ps1_controller player_controller[2];
+// 0 for native buttons/sticks, 1 for external js1, 2 for external js2
+Ps1Controller controllers[MAX_CONTROLLERS];
 
-void Set_Controller_Mode()
+// mapping of SDL buttons, line = profile, column = mapping SDL -> PSX
+uint8_t profiles[MAX_JS_PROFILES][PROFILE_LENGTH];
+
+void Set_Controller_Mode(uint_fast8_t i)
 {
 	switch (Config.AnalogMode) {
 		/* Digital. Required for some games. */
-	default: player_controller[0].id = 0x41;
-		player_controller[0].pad_mode = 0;
-		player_controller[0].pad_controllertype = PSE_PAD_TYPE_STANDARD;
+	default: controllers[i].id = 0x41;
+		controllers[i].pad_mode = 0;
+		controllers[i].pad_controllertype = PSE_PAD_TYPE_STANDARD;
 		break;
 		/* DualAnalog. Some games might misbehave with Dualshock like Descent so this is for those */
-	case 1: player_controller[0].id = 0x53;
-		player_controller[0].pad_mode = 1;
-		player_controller[0].pad_controllertype = PSE_PAD_TYPE_ANALOGPAD;
+	case 1: controllers[i].id = 0x53;
+		controllers[i].pad_mode = 1;
+		controllers[i].pad_controllertype = PSE_PAD_TYPE_ANALOGPAD;
 		break;
 		/* DualShock, required for Ape Escape. */
 	case 2: 
-		player_controller[0].id = 0x41;
-		player_controller[0].pad_mode = 0;
-		player_controller[0].pad_controllertype = PSE_PAD_TYPE_ANALOGPAD;
+		controllers[i].id = 0x41;
+		controllers[i].pad_mode = 0;
+		controllers[i].pad_controllertype = PSE_PAD_TYPE_ANALOGPAD;
 		break;
 	case 3: 
-		player_controller[0].id = 0x73;
-		player_controller[0].pad_mode = 1;
-		player_controller[0].pad_controllertype = PSE_PAD_TYPE_ANALOGPAD;
+		controllers[i].id = 0x73;
+		controllers[i].pad_mode = 1;
+		controllers[i].pad_controllertype = PSE_PAD_TYPE_ANALOGPAD;
 		break;
 	}
 }
 
-void joy_init()
-{
+void init_controllers() {
+	for(int i = 0; i<MAX_CONTROLLERS; i++) {
+		// init SDL joystick
+		controllers[i].sdl_joy = SDL_JoystickOpen(i);
 
-	sdl_joy[0] = SDL_JoystickOpen(0);
-	sdl_joy[1] = SDL_JoystickOpen(1);
+		// init analog axis
+		controllers[i].joy_left_ax0 = 127;
+		controllers[i].joy_left_ax1 = 127;
+		controllers[i].joy_right_ax0 = 127;
+		controllers[i].joy_right_ax1 = 127;
 
-	player_controller[0].joy_left_ax0 = 127;
-	player_controller[0].joy_left_ax1 = 127;
-	player_controller[0].joy_right_ax0 = 127;
-	player_controller[0].joy_right_ax1 = 127;
+		// init vibration
+		controllers[i].Vib[0] = 0;
+		controllers[i].Vib[1] = 0;
+		controllers[i].VibF[0] = 0;
+		controllers[i].VibF[1] = 0;
 
-	player_controller[0].Vib[0] = 0;
-	player_controller[0].Vib[1] = 0;
-	player_controller[0].VibF[0] = 0;
-	player_controller[0].VibF[1] = 0;
+		controllers[i].configmode = 0;
 
-	//player_controller[0].id = 0x41;
-	//player_controller[0].pad_mode = 0;
-	//player_controller[0].pad_controllertype = 0;
+		// config analog mode according to game
+		Set_Controller_Mode(i);
 
-	player_controller[0].configmode = 0;
+		// load other configs from cfg file
+		controller_config_load(i);
+	}
+	print_controllers_info();
+}
 
-	Set_Controller_Mode();
+void init_profiles(){
+	for(int i = 0; i<MAX_JS_PROFILES; i++) {
+		controller_profile_load(i);
+	}
 }
 
 void pad_update()
 {
 	int axisval;
 	SDL_Event event;
-	Uint8 *keys = SDL_GetKeyState(NULL);
 	bool popup_menu = false;
-
-	int k = 0;
-	while (keymap[k].key) {
-		if (keys[keymap[k].key]) {
-			pad1_buttons &= ~(1 << keymap[k].bit);
-		} else {
-			pad1_buttons |= (1 << keymap[k].bit);
-		}
-		k++;
-	}
+	uint_fast8_t i;
+	Ps1Controller *js;
+	uint8_t button;
+	int joy_commit_range;
+	SDLKey k;
 
 	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
 		case SDL_QUIT:
 			exit(0);
 			break;
+
+		// get native buttons press
 		case SDL_KEYDOWN:
+			js = &controllers[0];
+			k = event.key.keysym.sym;
 			switch (event.key.keysym.sym) {
 			case SDLK_HOME:
 			case SDLK_F10:
@@ -661,75 +767,148 @@ void pad_update()
 				break;
 #ifndef GCW_ZERO
 			case SDLK_ESCAPE:
-#endif
 				event.type = SDL_QUIT;
 				SDL_PushEvent(&event);
 				break;
-			case SDLK_v: { Config.ShowFps=!Config.ShowFps; } break;
-				default: break;
+#endif
+			case SDLK_v:
+				Config.ShowFps=!Config.ShowFps;
+				break;
+			default:
+				for (i = 0; i < DKEY_TOTAL; i++)
+					if (event.key.keysym.sym == keymap[i].key)
+					{
+						if(k==SDLK_UP || k==SDLK_DOWN || k==SDLK_LEFT || k==SDLK_RIGHT) {
+							// d-pad, skip mapping
+							button = keymap[i].bit;
+						} else {
+							// other keys, get mapped button from profile
+							button = profiles[js->profile_id][keymap[i].bit];
+						}
+						pad_buttons[js->player] &= ~(1 << button);
+						break;
+					}
+				break;
 			}
 			break;
+
+		// native buttons release
+		case SDL_KEYUP:
+			js = &controllers[0];
+			k = event.key.keysym.sym;
+			for (i = 0; i < DKEY_TOTAL; i++)
+				if (event.key.keysym.sym == keymap[i].key)
+				{
+					if(k==SDLK_UP || k==SDLK_DOWN || k==SDLK_LEFT || k==SDLK_RIGHT) {
+						// d-pad, skip mapping
+						button = keymap[i].bit;
+					} else {
+						// other keys, get mapped button from profile
+						button = profiles[js->profile_id][keymap[i].bit];
+					}
+					pad_buttons[js->player] |= (1 << button);
+					break;
+				}
+			break;
+
+		// analog sticks
 		case SDL_JOYAXISMOTION:
+			js = &controllers[event.jaxis.which];
+			axisval = event.jaxis.value;
+			joy_commit_range = ANALOG_MAX_VALUE*js->analog_deadzone/100;
+
+			pad_buttons[js->player] |= (1 << DKEY_UP);
+			pad_buttons[js->player] |= (1 << DKEY_DOWN);
+			pad_buttons[js->player] |= (1 << DKEY_LEFT);
+			pad_buttons[js->player] |= (1 << DKEY_RIGHT);
+
 			switch (event.jaxis.axis) {
 			case 0: /* X axis */
-				axisval = event.jaxis.value;
 				if (Config.AnalogArrow == 1) {
-					analog1 &= ~(ANALOG_LEFT | ANALOG_RIGHT);
+					analogs[js->player] &= ~(ANALOG_LEFT | ANALOG_RIGHT);
 					if (axisval > joy_commit_range) {
-						analog1 |= ANALOG_RIGHT;
+						analogs[js->player] |= ANALOG_RIGHT;
 					} else if (axisval < -joy_commit_range) {
-						analog1 |= ANALOG_LEFT;
+						analogs[js->player] |= ANALOG_LEFT;
 					}
 				} else {
-					player_controller[0].joy_left_ax0 = (axisval + 0x8000) >> 8;
+					js->joy_left_ax0 = (axisval + 0x8000) >> 8;
 				}
 				break;
 			case 1: /* Y axis */
-				axisval = event.jaxis.value;
 				if (Config.AnalogArrow == 1) {
-					analog1 &= ~(ANALOG_UP | ANALOG_DOWN);
+					analogs[js->player] &= ~(ANALOG_UP | ANALOG_DOWN);
 					if (axisval > joy_commit_range) {
-						analog1 |= ANALOG_DOWN;
+						analogs[js->player] |= ANALOG_DOWN;
 					} else if (axisval < -joy_commit_range) {
-						analog1 |= ANALOG_UP;
+						analogs[js->player] |= ANALOG_UP;
 					}
 				} else {
-					player_controller[0].joy_left_ax1 = (axisval + 0x8000) >> 8;
+					js->joy_left_ax1 = (axisval + 0x8000) >> 8;
 				}
 				break;
 			case 2: /* X axis */
-				axisval = event.jaxis.value;
-				player_controller[0].joy_right_ax0 = (axisval + 0x8000) >> 8;
+				js->joy_right_ax0 = (axisval + 0x8000) >> 8;
 				break;
 			case 3: /* Y axis */
-				axisval = event.jaxis.value;
-				player_controller[0].joy_right_ax1 = (axisval + 0x8000) >> 8;
+				js->joy_right_ax1 = (axisval + 0x8000) >> 8;
 				break;
 			}
 			break;
+
+		// USB joystick buttons
 		case SDL_JOYBUTTONDOWN:
-			if (event.jbutton.which == 0) {
-				pad1_buttons |= (1 << DKEY_L3);
-			} else if (event.jbutton.which == 1) {
-				pad1_buttons |= (1 << DKEY_R3);
-			}
+			js = &controllers[event.jbutton.which];
+			button = profiles[js->profile_id][event.jbutton.button];
+			pad_buttons[js->player] &= ~(1 << button);
+			break;
+		case SDL_JOYBUTTONUP:
+			js = &controllers[event.jbutton.which];
+			button = profiles[js->profile_id][event.jbutton.button];
+			pad_buttons[js->player] |= (1 << button);
+			break;
+
+		// USB joystick D-pad (HAT)
+		case SDL_JOYHATMOTION:
+			js = &controllers[event.jbutton.which];
+			// reset hat
+			pad_buttons[js->player] |= (1 << DKEY_UP);
+			pad_buttons[js->player] |= (1 << DKEY_DOWN);
+			pad_buttons[js->player] |= (1 << DKEY_LEFT);
+			pad_buttons[js->player] |= (1 << DKEY_RIGHT);
+			// get pressed direction(s)
+			if (event.jhat.value & SDL_HAT_UP)    pad_buttons[js->player] &= ~(1 << DKEY_UP);
+			if (event.jhat.value & SDL_HAT_DOWN)  pad_buttons[js->player] &= ~(1 << DKEY_DOWN);
+			if (event.jhat.value & SDL_HAT_LEFT)  pad_buttons[js->player] &= ~(1 << DKEY_LEFT);
+			if (event.jhat.value & SDL_HAT_RIGHT) pad_buttons[js->player] &= ~(1 << DKEY_RIGHT);
 			break;
 		default: break;
 		}
 	}
 
-	if (Config.AnalogArrow == 1) {
-		if ((pad1_buttons & (1 << DKEY_UP)) && (analog1 & ANALOG_UP)) {
-			pad1_buttons &= ~(1 << DKEY_UP);
+	for(i = 0; i<2; i++) {
+		if (Config.AnalogArrow == 1) {
+			if ((pad_buttons[i] & (1 << DKEY_UP)) && (analogs[i] & ANALOG_UP)) {
+				pad_buttons[i] &= ~(1 << DKEY_UP);
+			}
+			if ((pad_buttons[i] & (1 << DKEY_DOWN)) && (analogs[i] & ANALOG_DOWN)) {
+				pad_buttons[i] &= ~(1 << DKEY_DOWN);
+			}
+			if ((pad_buttons[i] & (1 << DKEY_LEFT)) && (analogs[i] & ANALOG_LEFT)) {
+				pad_buttons[i] &= ~(1 << DKEY_LEFT);
+			}
+			if ((pad_buttons[i] & (1 << DKEY_RIGHT)) && (analogs[i] & ANALOG_RIGHT)) {
+				pad_buttons[i] &= ~(1 << DKEY_RIGHT);
+			}
 		}
-		if ((pad1_buttons & (1 << DKEY_DOWN)) && (analog1 & ANALOG_DOWN)) {
-			pad1_buttons &= ~(1 << DKEY_DOWN);
-		}
-		if ((pad1_buttons & (1 << DKEY_LEFT)) && (analog1 & ANALOG_LEFT)) {
-			pad1_buttons &= ~(1 << DKEY_LEFT);
-		}
-		if ((pad1_buttons & (1 << DKEY_RIGHT)) && (analog1 & ANALOG_RIGHT)) {
-			pad1_buttons &= ~(1 << DKEY_RIGHT);
+	}
+
+	// if any player pressed start + select -> open menu
+	for(i=0; i<2; i++) {
+		if( !(pad_buttons[i] & ((1<<DKEY_SELECT) | (1<<DKEY_START)) )) {
+			printf("player %d opens menu\n", i);
+			popup_menu = true;
+			break;
 		}
 	}
 
@@ -745,23 +924,25 @@ void pad_update()
 		update_window_size(320, 240, false);
 		GameMenu();
 		emu_running = true;
-		pad1_buttons |= (1 << DKEY_SELECT) | (1 << DKEY_START) | (1 << DKEY_CROSS);
+		pad_buttons[0] |= (1 << DKEY_SELECT) | (1 << DKEY_START) | (1 << DKEY_CROSS);
+		pad_buttons[1] |= (1 << DKEY_SELECT) | (1 << DKEY_START) | (1 << DKEY_CROSS);
 		update_window_size(gpu.screen.hres, gpu.screen.vres, Config.PsxType == PSX_TYPE_NTSC);
 		if (Config.VideoScaling == 1) {
 			video_clear_cache();
 		}
 		emu_running = true;
-		pad1 |= (1 << DKEY_START);
-		pad1 |= (1 << DKEY_CROSS);
+		pads[0] |= (1 << DKEY_START);
+		pads[0] |= (1 << DKEY_CROSS);
 		pl_resume();    // Tell plugin_lib we're reentering emu
 	}
 
-	pad1 = pad1_buttons;
+	pads[0] = pad_buttons[0];
+	pads[1] = pad_buttons[1];
 }
 
 unsigned short pad_read(int num)
 {
-	return (num == 0 ? pad1 : pad2);
+	return pads[num];
 }
 
 void video_flip(void)
@@ -1497,7 +1678,8 @@ int main (int argc, char **argv)
 
 
 	Rumble_Init();
-	joy_init();
+	init_controllers();
+	init_profiles();
 
 
 	if (filename[0] != '\0') {
@@ -1626,3 +1808,4 @@ void port_printf(int x, int y, const char *text)
 		screen += 8;
 	}
 }
+

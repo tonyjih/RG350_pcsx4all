@@ -204,5 +204,5 @@ static void pl_stats_update(void)
 			(unsigned int)(pl_data.cpu_cur + 0.5f),
 			(unsigned int)(pl_data.fps_cur + 0.5f),
 			pl_data.sinfo.pal ? 50 : 60,
-			player_controller[0].pad_mode?"A":"D");
+			controllers[0].pad_mode?"A":"D");
 }

@@ -783,7 +783,7 @@ int SaveState(const char *file) {
 	     || mdecFreeze(f, FREEZE_SAVE) )
 		goto error;
 
-	if (freeze_rw(f, FREEZE_SAVE, &player_controller[0], sizeof(struct ps1_controller)))
+	if (freeze_rw(f, FREEZE_SAVE, &controllers[0], sizeof(struct ps1_controller)))
 		goto error;
 
 	if (SaveFuncs.close(f)) {
@@ -900,7 +900,7 @@ int LoadState(const char *file) {
 	     mdecFreeze(f, FREEZE_LOAD)     )
 		goto error;
 
-	if (freeze_rw(f, FREEZE_LOAD, &player_controller[0], sizeof(struct ps1_controller)))
+	if (freeze_rw(f, FREEZE_LOAD, &controllers[0], sizeof(struct ps1_controller)))
 	{
 		goto error;
 	}

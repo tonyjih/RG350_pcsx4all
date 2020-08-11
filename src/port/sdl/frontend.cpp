@@ -53,13 +53,17 @@ static int sshot_img_num;   // Which slot above image is loaded for
 
 static u32 ret = 0;
 
+static uint8_t profile_being_edited;
+static uint8_t js_being_edited;
+static bool is_remapping_button = false;
+
 static inline void key_reset() { ret = 0; }
 
 static unsigned int key_read(void)
 {
 	SDL_Event event;
 
-	while (SDL_PollEvent(&event))  {
+	while (SDL_PollEvent(&event)) {
 		switch (event.type) {
 		case SDL_KEYDOWN:
 			switch (event.key.keysym.sym) {
@@ -83,6 +87,7 @@ static unsigned int key_read(void)
 			default: break;
 			}
 			break;
+
 		case SDL_KEYUP:
 			switch(event.key.keysym.sym) {
 			case SDLK_UP:		ret &= ~KEY_UP;    break;
@@ -105,10 +110,50 @@ static unsigned int key_read(void)
 			default: break;
 			}
 			break;
+
+		case SDL_JOYBUTTONDOWN:
+			switch (event.jbutton.button) {
+				case 0: ret |= KEY_X; break;
+				case 1: ret |= KEY_A; break;
+				case 2:	ret |= KEY_B; break;
+				case 3: ret |= KEY_Y; break;
+				case 4: ret |= KEY_L; break;
+				case 5: ret |= KEY_R; break;
+				case 8: ret |= KEY_SELECT; break;
+				case 9: ret |= KEY_START; break;
+				default: break;
+			}
+			break;
+
+		case SDL_JOYBUTTONUP:
+			switch (event.jbutton.button) {
+				case 0: ret &= ~KEY_X; break;
+				case 1: ret &= ~KEY_A; break;
+				case 2:	ret &= ~KEY_B; break;
+				case 3: ret &= ~KEY_Y; break;
+				case 4: ret &= ~KEY_L; break;
+				case 5: ret &= ~KEY_R; break;
+				case 8: ret &= ~KEY_SELECT; break;
+				case 9: ret &= ~KEY_START; break;
+				default: break;
+			}
+			break;
+
+		case SDL_JOYHATMOTION:
+			// reset hat
+			ret &= ~KEY_UP;
+			ret &= ~KEY_DOWN;
+			ret &= ~KEY_LEFT;
+			ret &= ~KEY_RIGHT;
+			// get pressed direction(s)
+			if (event.jhat.value & SDL_HAT_UP)    ret |= KEY_UP;
+			if (event.jhat.value & SDL_HAT_RIGHT) ret |= KEY_RIGHT;
+			if (event.jhat.value & SDL_HAT_DOWN)  ret |= KEY_DOWN;
+			if (event.jhat.value & SDL_HAT_LEFT)  ret |= KEY_LEFT;
+			break;
 		default: break;
 		}
 	}
-
 
 	return ret;
 }
@@ -410,8 +455,31 @@ static int gui_LoadIso();
 static int gui_Settings();
 static int gui_GPUSettings();
 static int gui_SPUSettings();
+static int gui_InputSettings();
 static int gui_Cheats();
 static int gui_Quit();
+static int gui_input_native();
+static int gui_input_hotkeys();
+static int gui_input_js(uint8_t js_id);
+static int gui_input_js1() { return gui_input_js(1); }
+static int gui_input_js2() { return gui_input_js(2); }
+static int gui_profiles();
+static int gui_profile_edit(uint8_t profile_id);
+static int gui_profile_edit0() { return gui_profile_edit(0); }
+static int gui_profile_edit1() { return gui_profile_edit(1); }
+static int gui_profile_edit2() { return gui_profile_edit(2); }
+static int gui_profile_edit3() { return gui_profile_edit(3); }
+static int gui_profile_edit4() { return gui_profile_edit(4); }
+static int gui_profile_edit5() { return gui_profile_edit(5); }
+static int gui_profile_edit6() { return gui_profile_edit(6); }
+static int gui_profile_edit7() { return gui_profile_edit(7); }
+static int gui_profile_edit8() { return gui_profile_edit(8); }
+static int gui_profile_edit9() { return gui_profile_edit(9); }
+static int gui_profile_edit_from_js();
+static int remap_button(PSX_BUTTON button);
+static int profile_remap_all_buttons();
+static int profile_reset_to_default();
+static void ShowMenu(MENU *menu);
 
 static int gui_Credits()
 {
@@ -463,13 +531,14 @@ static MENUITEM gui_MainMenuItems[] = {
 	{(char *)"Core settings", &gui_Settings, NULL, NULL, NULL},
 	{(char *)"GPU settings", &gui_GPUSettings, NULL, NULL, NULL},
 	{(char *)"SPU settings", &gui_SPUSettings, NULL, NULL, NULL},
+	{(char *)"Input settings", &gui_InputSettings, NULL, NULL, NULL},
 	{(char *)"Credits", &gui_Credits, NULL, NULL, NULL},
 	{(char *)"Quit", &gui_Quit, NULL, NULL, NULL},
 	{0}
 };
 
 #define MENU_SIZE ((sizeof(gui_MainMenuItems) / sizeof(MENUITEM)) - 1)
-static MENU gui_MainMenu = { MENU_SIZE, 0, 102, 140, (MENUITEM *)&gui_MainMenuItems };
+static MENU gui_MainMenu = { MENU_SIZE, 0, 56, 140, (MENUITEM *)&gui_MainMenuItems };
 
 static int gui_state_save(int slot)
 {
@@ -1038,6 +1107,7 @@ static MENUITEM gui_GameMenuItems[] =
   {(char *)"GPU settings", &gui_GPUSettings, NULL, NULL, NULL},
   {(char *)"SPU settings", &gui_SPUSettings, NULL, NULL, NULL},
   {(char *)"Core settings", &gui_Settings, NULL, NULL, NULL},
+  {(char *)"Input settings", &gui_InputSettings, NULL, NULL, NULL},
   {(char *)"Quit", &gui_Quit, NULL, NULL, NULL},
   {0}
 };
@@ -1049,6 +1119,7 @@ static MENUITEM gui_GameMenuItems_WithCheats[] =
   {(char *)"GPU settings", &gui_GPUSettings, NULL, NULL, NULL},
   {(char *)"SPU settings", &gui_SPUSettings, NULL, NULL, NULL},
   {(char *)"Core settings", &gui_Settings, NULL, NULL, NULL},
+  {(char *)"Input settings", &gui_InputSettings, NULL, NULL, NULL},
   {(char *)"Cheats", &gui_Cheats, NULL, NULL, NULL},
   {(char *)"Quit", &gui_Quit, NULL, NULL, NULL},
   {0}
@@ -1057,6 +1128,8 @@ static MENUITEM gui_GameMenuItems_WithCheats[] =
 #define GMENU_SIZE ((sizeof(gui_GameMenuItems) / sizeof(MENUITEM)) - 1)
 #define GMENUWC_SIZE ((sizeof(gui_GameMenuItems_WithCheats) / sizeof(MENUITEM)) - 1)
 static MENU gui_GameMenu = { GMENU_SIZE, 0, 102, 120, (MENUITEM *)&gui_GameMenuItems };
+
+/***** core settings *****/
 
 #ifdef PSXREC
 static int emu_alter(u32 keys)
@@ -1195,10 +1268,9 @@ static char* AnalogArrow_show()
 	return buf;
 }
 
-extern void Set_Controller_Mode();
+extern void Set_Controller_Mode(uint_fast8_t js);
 static int Analog_Mode_alter(u32 keys)
 {
-	
 	if (keys & KEY_RIGHT) {
 		Config.AnalogMode++;
 		if (Config.AnalogMode > 3) Config.AnalogMode = 3;
@@ -1206,7 +1278,7 @@ static int Analog_Mode_alter(u32 keys)
 		Config.AnalogMode--;
 		if (Config.AnalogMode < 1) Config.AnalogMode = 0;
 	}
-	Set_Controller_Mode();
+	Set_Controller_Mode(0);
 	return 0;
 }
 
@@ -1346,8 +1418,6 @@ static MENUITEM gui_SettingsItems[] = {
 	{(char *)"HLE emulated BIOS  ", NULL, &bios_alter, &bios_show, NULL},
 	{(char *)"Set BIOS file      ", &bios_set, NULL, &bios_file_show, NULL},
 	{(char *)"Skip BIOS logos    ", NULL, &SlowBoot_alter, &SlowBoot_show, &SlowBoot_hint},
-	{(char *)"Map L-stick to Dpad", NULL, &AnalogArrow_alter, &AnalogArrow_show, &AnalogArrow_hint},
-	{(char *)"Analog Mode        ", NULL, &Analog_Mode_alter, &Analog_Mode_show, &Analog_Mode_hint},
 	{(char *)"RCntFix            ", NULL, &RCntFix_alter, &RCntFix_show, &RCntFix_hint},
 	{(char *)"VSyncWA            ", NULL, &VSyncWA_alter, &VSyncWA_show, &VSyncWA_hint},
 	{(char *)"Memory card Slot1  ", NULL, &McdSlot1_alter, &McdSlot1_show, NULL},
@@ -1869,6 +1939,340 @@ static MENUITEM gui_SPUSettingsItems[] = {
 #define SET_SPUSIZE ((sizeof(gui_SPUSettingsItems) / sizeof(MENUITEM)) - 1)
 static MENU gui_SPUSettingsMenu = { SET_SPUSIZE, 0, 56, 102, (MENUITEM *)&gui_SPUSettingsItems };
 
+
+/***** input settings *****/
+
+void menu_refresh(MENU *menu) {
+	video_clear();
+	ShowMenu(menu);
+	video_flip();
+}
+
+static int js_profile_change(u32 keys) {
+	uint8_t js = js_being_edited;
+	if ((keys & KEY_RIGHT) && (controllers[js].profile_id < MAX_JS_PROFILES-1)) {
+		controllers[js].profile_id += 1;
+	} else if ((keys & KEY_LEFT) && (controllers[js].profile_id > 0)) {
+		controllers[js].profile_id -= 1;
+	}
+	controller_config_save(js);
+	return 0;
+}
+
+static char *js_profile_show() {
+	static char buf[4] = "\0";
+	sprintf(buf, "%d", controllers[js_being_edited].profile_id);
+	return buf;
+}
+
+static void js_profile_hint() {
+	port_printf(5*8,  9*8,  " Press A to edit this profile ");
+	port_printf(5*8, 10*8+1, "LEFT / RIGHT to change profile");
+}
+
+
+static int js_deadzone_change(u32 keys) {
+	uint8_t js = js_being_edited;
+	if ((keys & KEY_RIGHT) && (controllers[js].analog_deadzone < 100)) {
+		controllers[js].analog_deadzone += 5;
+	} else if ((keys & KEY_LEFT) && (controllers[js].analog_deadzone > 0)) {
+		controllers[js].analog_deadzone -= 5;
+	}
+	controller_config_save(js);
+	return 0;
+}
+
+static char *js_deadzone_show() {
+	static char buf[5] = "\0";
+	sprintf(buf, "%d%%", controllers[js_being_edited].analog_deadzone);
+	return buf;
+}
+
+static int js_player_change(u32 keys) {
+	uint8_t js = js_being_edited;
+	controllers[js].player = (controllers[js].player) ? 0 : 1;
+	controller_config_save(js);
+	return 0;
+}
+
+static char *js_player_show() {
+	static char buf[4] = "\0";
+	sprintf(buf, "%d", controllers[js_being_edited].player+1);
+	return buf;
+}
+
+
+static void map_button_hint() {
+	if(is_remapping_button) {
+		port_printf(8*8, 8*8  , "Now press the new button,");
+		port_printf(8*8, 9*8+1, " or UP / DOWN to cancel ");
+	} else {
+		port_printf(6*8, 8*8  , "Press A to remap this button");
+	}
+}
+
+static void map_all_buttons_hint() {
+	if(is_remapping_button) {
+		port_printf(4*8, 8*8  , "Press the next button to remap,");
+		port_printf(4*8, 9*8+1, "     or UP / DOWN to stop     ");
+	} else {
+		port_printf(2*8, 8*8  , "Press A to remap all buttons at once");
+	}
+}
+
+// input menu
+static MENUITEM gui_InputItems[] = {
+  {(char *)"Native buttons", &gui_input_native, NULL, NULL, NULL},
+  {(char *)"USB gamepad 1", &gui_input_js1, NULL, NULL, NULL},
+  {(char *)"USB gamepad 2", &gui_input_js2, NULL, NULL, NULL},
+  {(char *)"Profiles", &gui_profiles, NULL, NULL, NULL},
+  {(char *)"Hotkeys", &gui_input_hotkeys, NULL, NULL, NULL},
+  {0}
+};
+#define SET_INPUT_SIZE ((sizeof(gui_InputItems) / sizeof(MENUITEM)) - 1)
+static MENU gui_InputMenu = { SET_INPUT_SIZE, 0, 102, 120, (MENUITEM *)&gui_InputItems };
+
+// native buttons menu
+static MENUITEM gui_input_NativeItems[] = {
+	{(char *)"Player               ", NULL, &js_player_change, &js_player_show, NULL},
+	{(char *)"Button profile       ", &gui_profile_edit_from_js, &js_profile_change, &js_profile_show, &js_profile_hint},
+	{(char *)"Map L-stick to D-pad ", NULL, &AnalogArrow_alter, &AnalogArrow_show, &AnalogArrow_hint},
+	{(char *)"Analog Mode          ", NULL, &Analog_Mode_alter, &Analog_Mode_show, &Analog_Mode_hint},
+	{(char *)"Analogs deadzone     ", NULL, &js_deadzone_change, &js_deadzone_show, NULL},
+	{0}
+};
+#define SET_INPUT_NATIVE_SIZE ((sizeof(gui_input_NativeItems) / sizeof(MENUITEM)) - 1)
+static MENU gui_input_NativeMenu = { SET_INPUT_NATIVE_SIZE, 0, 56, 120, (MENUITEM *)&gui_input_NativeItems };
+
+// hotkeys menu
+static MENUITEM gui_input_HotkeysItems[] = {
+  {(char *)"Not implemented yet", NULL, NULL, NULL, NULL},
+  {0}
+};
+#define SET_INPUT_HOTKEYS_SIZE ((sizeof(gui_input_HotkeysItems) / sizeof(MENUITEM)) - 1)
+static MENU gui_input_HotkeysMenu = { SET_INPUT_HOTKEYS_SIZE, 0, 56, 120, (MENUITEM *)&gui_input_HotkeysItems };
+
+// USB gamepad 1 and 2 menus
+static MENUITEM gui_input_JSItems[] = {
+	{(char *)"Player            ", NULL, &js_player_change, &js_player_show, NULL},
+	{(char *)"Button profile    ", &gui_profile_edit_from_js, &js_profile_change, &js_profile_show, &js_profile_hint},
+	{(char *)"Analogs deadzone  ", NULL, &js_deadzone_change, &js_deadzone_show, NULL},
+	{0}
+};
+#define SET_INPUT_JS_SIZE ((sizeof(gui_input_JSItems) / sizeof(MENUITEM)) - 1)
+static MENU gui_input_JSMenu = { SET_INPUT_JS_SIZE, 0, 56, 120, (MENUITEM *)&gui_input_JSItems };
+
+
+static char *psx_but_show(PSX_BUTTON button) {
+	static char buf[4] = "\0";
+	for(int i=0; i<PROFILE_LENGTH; i++) {
+		if(profiles[profile_being_edited][i] == button) {
+			sprintf(buf, "%d", i);
+			return buf;
+		}
+	}
+	strcpy(buf, "-");
+	return buf;
+}
+static char *psx_but_show_triangle() { return psx_but_show(DKEY_TRIANGLE); }
+static char *psx_but_show_circle()   { return psx_but_show(DKEY_CIRCLE); }
+static char *psx_but_show_cross()    { return psx_but_show(DKEY_CROSS); }
+static char *psx_but_show_square()   { return psx_but_show(DKEY_SQUARE); }
+static char *psx_but_show_L1()       { return psx_but_show(DKEY_L1); }
+static char *psx_but_show_R1()       { return psx_but_show(DKEY_R1); }
+static char *psx_but_show_L2()       { return psx_but_show(DKEY_L2); }
+static char *psx_but_show_R2()       { return psx_but_show(DKEY_R2); }
+static char *psx_but_show_select()   { return psx_but_show(DKEY_SELECT); }
+static char *psx_but_show_start()    { return psx_but_show(DKEY_START); }
+static char *psx_but_show_L3()       { return psx_but_show(DKEY_L3); }
+static char *psx_but_show_R3()       { return psx_but_show(DKEY_R3); }
+
+static int psx_but_map_triangle() { return remap_button(DKEY_TRIANGLE); }
+static int psx_but_map_circle()   { return remap_button(DKEY_CIRCLE); }
+static int psx_but_map_cross()    { return remap_button(DKEY_CROSS); }
+static int psx_but_map_square()   { return remap_button(DKEY_SQUARE); }
+static int psx_but_map_L1()       { return remap_button(DKEY_L1); }
+static int psx_but_map_R1()       { return remap_button(DKEY_R1); }
+static int psx_but_map_L2()       { return remap_button(DKEY_L2); }
+static int psx_but_map_R2()       { return remap_button(DKEY_R2); }
+static int psx_but_map_select()   { return remap_button(DKEY_SELECT); }
+static int psx_but_map_start()    { return remap_button(DKEY_START); }
+static int psx_but_map_L3()       { return remap_button(DKEY_L3); }
+static int psx_but_map_R3()       { return remap_button(DKEY_R3); }
+
+// button profiles menu
+static MENUITEM gui_profilesItems[] = {
+	{(char *)"Profile 0", &gui_profile_edit0, NULL, NULL, NULL},
+	{(char *)"Profile 1", &gui_profile_edit1, NULL, NULL, NULL},
+	{(char *)"Profile 2", &gui_profile_edit2, NULL, NULL, NULL},
+	{(char *)"Profile 3", &gui_profile_edit3, NULL, NULL, NULL},
+	{(char *)"Profile 4", &gui_profile_edit4, NULL, NULL, NULL},
+	{(char *)"Profile 5", &gui_profile_edit5, NULL, NULL, NULL},
+	{(char *)"Profile 6", &gui_profile_edit6, NULL, NULL, NULL},
+	{(char *)"Profile 7", &gui_profile_edit7, NULL, NULL, NULL},
+	{(char *)"Profile 8", &gui_profile_edit8, NULL, NULL, NULL},
+	{(char *)"Profile 9", &gui_profile_edit9, NULL, NULL, NULL},
+	{0}
+};
+#define SET_PROFILES_SIZE ((sizeof(gui_profilesItems) / sizeof(MENUITEM)) - 1)
+static MENU gui_profilesMenu = { SET_PROFILES_SIZE, 0, 120, 100, (MENUITEM *)&gui_profilesItems };
+
+// button profile edit menu
+static MENUITEM gui_profile_editItems[] = {
+	{(char *)"PSX Triangle  ", &psx_but_map_triangle, NULL, &psx_but_show_triangle, &map_button_hint},
+	{(char *)"PSX Circle    ", &psx_but_map_circle, NULL, &psx_but_show_circle, &map_button_hint},
+	{(char *)"PSX X         ", &psx_but_map_cross, NULL, &psx_but_show_cross, &map_button_hint},
+	{(char *)"PSX Square    ", &psx_but_map_square, NULL, &psx_but_show_square, &map_button_hint},
+	{(char *)"PSX L1        ", &psx_but_map_L1, NULL, &psx_but_show_L1, &map_button_hint},
+	{(char *)"PSX R1        ", &psx_but_map_R1, NULL, &psx_but_show_R1, &map_button_hint},
+	{(char *)"PSX L2        ", &psx_but_map_L2, NULL, &psx_but_show_L2, &map_button_hint},
+	{(char *)"PSX R2        ", &psx_but_map_R2, NULL, &psx_but_show_R2, &map_button_hint},
+	{(char *)"PSX Select    ", &psx_but_map_select, NULL, &psx_but_show_select, &map_button_hint},
+	{(char *)"PSX Start     ", &psx_but_map_start, NULL, &psx_but_show_start, &map_button_hint},
+	{(char *)"PSX L3        ", &psx_but_map_L3, NULL, &psx_but_show_L3, &map_button_hint},
+	{(char *)"PSX R3        ", &psx_but_map_R3, NULL, &psx_but_show_R3, &map_button_hint},
+	{(char *)"Remap all buttons", &profile_remap_all_buttons, NULL, NULL, &map_all_buttons_hint},
+	{(char *)"Restore defaults ", &profile_reset_to_default, NULL, NULL, NULL},
+	{0}
+};
+#define SET_PROFILE_EDIT_SIZE ((sizeof(gui_profile_editItems) / sizeof(MENUITEM)) - 1)
+static MENU gui_profile_editMenu = { SET_PROFILE_EDIT_SIZE, 0, 102, 92, (MENUITEM *)&gui_profile_editItems };
+
+
+static int gui_input_native() {
+	js_being_edited = 0;
+	gui_RunMenu(&gui_input_NativeMenu);
+	return 0;
+}
+
+static int gui_input_hotkeys() {
+	gui_RunMenu(&gui_input_HotkeysMenu);
+	return 0;
+}
+
+static int gui_input_js(uint8_t js_id) {
+	js_being_edited = js_id;
+	gui_RunMenu(&gui_input_JSMenu);
+	return 0;
+}
+
+static int gui_profiles() {
+	gui_RunMenu(&gui_profilesMenu);
+	return 0;
+}
+
+static int gui_profile_edit(uint8_t profile_id) {
+	profile_being_edited = profile_id;
+	gui_RunMenu(&gui_profile_editMenu);
+	return 0;
+}
+
+static int gui_profile_edit_from_js() {
+	profile_being_edited = controllers[js_being_edited].profile_id;
+	gui_RunMenu(&gui_profile_editMenu);
+	return 0;
+}
+
+static uint16_t read_button_to_remap() {
+	SDL_Event e;
+	SDLKey k;
+
+	while(1) {
+		while(SDL_PollEvent(&e)) {
+			switch (e.type) {
+			case SDL_JOYBUTTONDOWN: return e.jbutton.button;
+			case SDL_JOYHATMOTION: return -1;
+			case SDL_KEYDOWN:
+				k = e.key.keysym.sym;
+				if(k==SDLK_UP || k==SDLK_DOWN || k==SDLK_LEFT || k==SDLK_RIGHT) {
+					return -1;
+				}
+				for(int i = 0; i < DKEY_TOTAL; i++)
+					if(k == keymap[i].key)
+						return keymap[i].bit;
+				break;
+			default: break;
+			}
+		}
+	}
+}
+
+static int remap_button(PSX_BUTTON button) {
+	uint16_t sdl_button;
+
+	is_remapping_button = true;
+	menu_refresh(&gui_profile_editMenu);
+
+	// get the new button that will be mapped to this PSX action
+	sdl_button = read_button_to_remap();
+	if(sdl_button != (uint16_t)-1) {
+		// remove all mappings to this button
+		for(int i=0; i<PROFILE_LENGTH; i++)
+			if(profiles[profile_being_edited][i] == button)
+				profiles[profile_being_edited][i] = DKEY_NONE;
+
+		// remap and save to profile file
+		profiles[profile_being_edited][sdl_button] = button;
+		controller_profile_save(profile_being_edited, profiles[profile_being_edited]);
+	}
+
+	is_remapping_button = false;
+	video_clear();
+	return 0;
+}
+
+static int profile_remap_all_buttons() {
+	int i=0;
+	uint16_t sdl_button;
+
+	enum PSX_BUTTON psx_buttons[] = {
+		DKEY_TRIANGLE,
+		DKEY_CIRCLE,
+		DKEY_CROSS,
+		DKEY_SQUARE,
+		DKEY_L1,
+		DKEY_R1,
+		DKEY_L2,
+		DKEY_R2,
+		DKEY_SELECT,
+		DKEY_START,
+		DKEY_L3,
+		DKEY_R3
+	};
+
+	is_remapping_button = true;
+
+	// unmap all buttons
+	for(i=0; i < PROFILE_LENGTH; i++) {
+		profiles[profile_being_edited][i] = DKEY_NONE;
+	}
+	menu_refresh(&gui_profile_editMenu);
+
+	// remap all buttons
+	// 12 because we don't remap d-pad
+	for(i=0; i < 12; i++) {
+        sdl_button = read_button_to_remap();
+        if(sdl_button == (uint16_t)-1) {
+			break;
+		}
+		profiles[profile_being_edited][sdl_button] = psx_buttons[i];
+		menu_refresh(&gui_profile_editMenu);
+	}
+
+	// persist config and clear screen to return to normal menu
+	controller_profile_save(profile_being_edited, profiles[profile_being_edited]);
+	video_clear();
+	is_remapping_button = false;
+	return 0;
+}
+
+static int profile_reset_to_default() {
+	controller_profile_set_to_default(profile_being_edited);
+	return 0;
+}
+
+/***** Main Menu settings *****/
+
 static int gui_LoadIso()
 {
 	static char isoname[PATH_MAX];
@@ -1887,24 +2291,27 @@ static int gui_LoadIso()
 	return 0;
 }
 
+static int gui_InputSettings()
+{
+	gui_RunMenu(&gui_InputMenu);
+	return 0;
+}
+
 static int gui_Settings()
 {
 	gui_RunMenu(&gui_SettingsMenu);
-
 	return 0;
 }
 
 static int gui_GPUSettings()
 {
 	gui_RunMenu(&gui_GPUSettingsMenu);
-
 	return 0;
 }
 
 static int gui_SPUSettings()
 {
 	gui_RunMenu(&gui_SPUSettingsMenu);
-
 	return 0;
 }
 

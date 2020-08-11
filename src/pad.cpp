@@ -105,7 +105,7 @@ unsigned char PAD1_poll(unsigned char value) {
 		// Don't enable Analog/Vibration for a Digital or DualAnalog controller
 		CurCmd = value;
 		g.CurByte1++;
-		if (player_controller[0].pad_controllertype != PSE_PAD_TYPE_ANALOGPAD) {
+		if (controllers[0].pad_controllertype != PSE_PAD_TYPE_ANALOGPAD) {
 			CurCmd = CMD_READ_DATA_AND_VIBRATE;
 		}
 		g.CmdLen1 = 8;
@@ -116,7 +116,7 @@ unsigned char PAD1_poll(unsigned char value) {
 			return 0xF3;
 		case CMD_QUERY_MODEL_AND_MODE: 
 			buf = stdmodel;
-			buf[4] = player_controller[0].pad_mode;
+			buf[4] = controllers[0].pad_mode;
 			return 0xF3;
 		case CMD_QUERY_ACT: 
 			buf = unk46;
@@ -131,7 +131,7 @@ unsigned char PAD1_poll(unsigned char value) {
 			buf = unk4d;
 			return 0xF3;
 		case CMD_CONFIG_MODE:
-			if (player_controller[0].configmode) {
+			if (controllers[0].configmode) {
 				buf = stdcfg;
 				return 0xF3;
 			}
@@ -147,18 +147,18 @@ unsigned char PAD1_poll(unsigned char value) {
 			 * and Dualshock features won't work.
 			 * */
 
-			if (player_controller[0].pad_mode == 1) {
-				buf[4] = player_controller[0].joy_right_ax0;
-				buf[5] = player_controller[0].joy_right_ax1;
-				buf[6] = player_controller[0].joy_left_ax0;
-				buf[7] = player_controller[0].joy_left_ax1;
+			if (controllers[0].pad_mode == 1) {
+				buf[4] = controllers[0].joy_right_ax0;
+				buf[5] = controllers[0].joy_right_ax1;
+				buf[6] = controllers[0].joy_left_ax0;
+				buf[7] = controllers[0].joy_left_ax1;
 			}
 			else
 			{
 				g.CmdLen1 = 4;
 			}
 
-			return player_controller[0].id;
+			return controllers[0].id;
 		}
 	}
 
@@ -168,12 +168,12 @@ unsigned char PAD1_poll(unsigned char value) {
 	if (g.CurByte1 == 2) {
 		switch (CurCmd) {
 		case CMD_CONFIG_MODE: 
-			player_controller[0].configmode = value;
+			controllers[0].configmode = value;
 			break;
 
 		case CMD_SET_MODE_AND_LOCK: 
-			player_controller[0].pad_mode = value;
-			player_controller[0].id = value ? 0x73 : 0x41;
+			controllers[0].pad_mode = value;
+			controllers[0].id = value ? 0x73 : 0x41;
 			break;
 
 		case CMD_QUERY_ACT:
@@ -205,25 +205,25 @@ unsigned char PAD1_poll(unsigned char value) {
 		}
 	}
 
-	if (player_controller[0].pad_controllertype == PSE_PAD_TYPE_ANALOGPAD) 
+	if (controllers[0].pad_controllertype == PSE_PAD_TYPE_ANALOGPAD)
 	{
 		switch (CurCmd) {
 		case CMD_READ_DATA_AND_VIBRATE:
-				if (g.CurByte1 == player_controller[0].Vib[0]) {
-					player_controller[0].VibF[0] = value;
+				if (g.CurByte1 == controllers[0].Vib[0]) {
+					controllers[0].VibF[0] = value;
 #ifdef RUMBLE
-					if (player_controller[0].VibF[0] != 0) {
+					if (controllers[0].VibF[0] != 0) {
 						Shake_Play(device, id_shake_level[3]);
 					}
 #endif
 					
 				}
 
-				if (g.CurByte1 == player_controller[0].Vib[1]) {
-					player_controller[0].VibF[1] = value;
+				if (g.CurByte1 == controllers[0].Vib[1]) {
+					controllers[0].VibF[1] = value;
 
 #ifdef RUMBLE
-					if (player_controller[0].VibF[1] != 0) {
+					if (controllers[0].VibF[1] != 0) {
 						Shake_Play(device, id_shake_level[value>>4]);
 					}
 #endif
@@ -232,13 +232,13 @@ unsigned char PAD1_poll(unsigned char value) {
 			break;
 		case CMD_VIBRATION_TOGGLE:
 			for (uint8_t i = 0; i < 2; i++) {
-				if (player_controller[0].Vib[i] == g.CurByte1)
+				if (controllers[0].Vib[i] == g.CurByte1)
 					buf[g.CurByte1] = 0;
 			}
 			if (value < 2) {
-				player_controller[0].Vib[value] = g.CurByte1;
-				if ((player_controller[0].id & 0x0f) < (g.CurByte1 - 1) / 2) {
-					player_controller[0].id = (player_controller[0].id & 0xf0) + (g.CurByte1 - 1) / 2;
+				controllers[0].Vib[value] = g.CurByte1;
+				if ((controllers[0].id & 0x0f) < (g.CurByte1 - 1) / 2) {
+					controllers[0].id = (controllers[0].id & 0xf0) + (g.CurByte1 - 1) / 2;
 				}
 			}
 			break;
